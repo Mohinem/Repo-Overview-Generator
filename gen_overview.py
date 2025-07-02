@@ -1,53 +1,87 @@
-# Repo Overview Generator
+#!/usr/bin/env python3
+import argparse
+import subprocess
+import pathlib
+import textwrap
 
-A simple Python utility to bundle an entire Git repository into one ChatGPT-friendly Markdown file. It collects:
+def run_git(cmd, cwd):
+    return subprocess.check_output(["git"] + cmd, cwd=cwd).decode().strip()
 
-- **Metadata** (latest commit SHA, message, date)  
-- **File tree** (via `git ls-files`)  
-- **Contents** of each tracked file in fenced code blocks  
-- **Language hints** based on file extension  
-- **Automatic truncation** of very large files  
+def main():
+    p = argparse.ArgumentParser(
+        description="Generate a single markdown overview of a git repo."
+    )
+    p.add_argument(
+        "repo_path",
+        help="Path to the root of your git repository"
+    )
+    p.add_argument(
+        "-o", "--output",
+        default="project-overview.md",
+        help="Where to write the generated markdown"
+    )
+    args = p.parse_args()
 
----
+    ROOT = pathlib.Path(args.repo_path).expanduser().resolve()
+    OUT  = pathlib.Path(args.output).expanduser().resolve()
 
-## 📖 Table of Contents
+    # sanity check
+    if not (ROOT / ".git").exists():
+        print(f"⚠️  {ROOT} does not look like a git repo.")
+        return
 
-- [Features](#features)  
-- [Prerequisites](#prerequisites)  
-- [Installation](#installation)  
-- [Usage](#usage)  
-- [Options](#options)  
-- [How It Works](#how-it-works)  
-- [Customization](#customization)  
-- [Contributing](#contributing)  
-- [License](#license)  
+    # 1) Metadata
+    sha   = run_git(["rev-parse", "--short", "HEAD"], cwd=ROOT)
+    msg   = run_git(["log", "-1", "--pretty=%s"], cwd=ROOT)
+    when  = run_git(["log", "-1", "--date=iso", "--pretty=%cd"], cwd=ROOT)
+    files = run_git(["ls-files"], cwd=ROOT).splitlines()
 
----
+    # 2) Write front­-matter + file list
+    with OUT.open("w") as f:
+        f.write(textwrap.dedent(f"""\
+        ---
+        project: {ROOT.name}
+        commit: {sha!r} (“{msg}”)
+        date: {when}
+        files: {len(files)}
+        ---
 
-## 🚀 Features
+        # {ROOT.name}
 
-- **Zero dependencies** beyond Git & Python 3.6+  
-- **Runs anywhere**—point it at any local clone  
-- **YAML front-matter** with commit info for easy parsing  
-- **Language-aware** code blocks (`.py` → `python`, `.sh` → `bash`, etc.)  
-- **Truncation** of files larger than 30 000 characters  
+        ## 📦 File structure
+        ```
+        {"  \n".join(files)}
+        ```
 
----
+        ## 🔍 Files
+        """))
 
-## 🛠 Prerequisites
+        # 3) Dump each file
+        for path in files:
+            p = ROOT / path
+            ext = p.suffix.lower().lstrip(".")
+            lang = {
+                "py": "python",
+                "sh": "bash",
+                "md": "markdown",
+                "yml": "yaml",
+                "yaml": "yaml",
+                "dockerfile": "dockerfile",
+                "bat": "batch"
+            }.get(ext, ext or "text")
 
-- Python **3.6** or newer  
-- A working **Git** installation  
-- A **Git repository** you have read access to  
+            f.write(f"\n### `{path}`\n```{lang}\n")
+            try:
+                text = p.read_text(encoding="utf-8")
+                if len(text) > 30_000:
+                    text = text[:30_000] + "\n...[truncated]...\n"
+                f.write(text)
+            except Exception as e:
+                f.write(f"...could not read ({e})...\n")
+            f.write("```\n")
 
----
+    print(f"✅ Generated {OUT}")
 
-## 📥 Installation
-
-Clone this repository (or copy the script) anywhere you like:
-
-```bash
-git clone https://github.com/your-username/repo-overview-generator.git
-cd repo-overview-generator
-chmod +x gen_overview.py
+if __name__ == "__main__":
+    main()
 
